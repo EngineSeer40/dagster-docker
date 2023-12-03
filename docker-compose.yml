@@ -1,0 +1,127 @@
+version: "3.7"
+
+services:
+
+  dagster_webserver:
+    image: australia-southeast1-docker.pkg.dev/ml-dev-403200/dagster-docker/dagster-project:develop
+    volumes:
+      - ${HOME}/.dbt:/mnt/dbt
+      - ${HOME}/.config/gcloud:/mnt/gcloud
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /tmp/io_manager_storage:/tmp/io_manager_storage
+      - /mnt/sentimax:/mnt/sentimax
+    networks:
+      - dagster_network
+    command: >
+      sh -c "cd bin &&
+             chmod +x ./up-dagster.sh &&
+             . ./up-dagster.sh &&  
+             cd .. &&
+             dagster-webserver -w workspace.yaml --read-only --path-prefix /dagster -h 0.0.0.0 -p 3000"  
+    container_name:
+      dagster_webserver
+    expose:
+      - "3000"
+    ports:
+      - "3000:3000"
+    depends_on:
+      - docker_postgres
+      - dagster_user_code
+
+  dagster_daemon:
+    image: australia-southeast1-docker.pkg.dev/ml-dev-403200/dagster-docker/dagster-project:develop
+    volumes:
+      - ${HOME}/.config/gcloud:/mnt/gcloud
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /tmp/io_manager_storage:/tmp/io_manager_storage
+      - /mnt/sentimax:/mnt/sentimax
+    networks:
+      - dagster_network
+    command: >
+      sh -c "cd bin &&
+             chmod +x ./up-dagster.sh &&
+             . ./up-dagster.sh &&  
+             cd .. &&  
+             dagster-daemon run "
+    restart: on-failure
+    depends_on:
+      - docker_postgres
+      - dagster_user_code
+
+  docker_postgres:
+    image: australia-southeast1-docker.pkg.dev/ml-dev-403200/dagster-docker/dagster-postgres:develop
+    restart: always
+    ports:
+      - 5432:5432
+    networks:
+      - dagster_network
+    container_name: docker_postgres
+
+  dagster_user_code:
+    image: australia-southeast1-docker.pkg.dev/ml-dev-403200/dagster-docker/dagster-project:develop
+    container_name: dagster_user_code
+    restart: always
+    networks:
+      - dagster_network
+    expose:
+      - "4000"
+    ports:
+      - 4000:4000
+    command: >
+      sh -c "cd bin &&
+             chmod +x ./up-dagster.sh &&
+             . ./up-dagster.sh &&  
+             cd .. &&
+             dagster api grpc -h 0.0.0.0 -p 4000 -f /opt/dagster/dagster-project/dagster_project/__init__.py"
+    volumes:
+      - ${HOME}/.config/gcloud:/mnt/gcloud
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /tmp/io_manager_storage:/tmp/io_manager_storage
+      - /mnt/sentimax:/mnt/sentimax
+  
+  grafana:
+    image: australia-southeast1-docker.pkg.dev/ml-dev-403200/dagster-docker/dagster-grafana:develop
+    container_name: grafana
+    restart: unless-stopped
+    ports:
+      - '3010:3000'
+    volumes:
+      - ./dagster_grafana/config/:/etc/grafana/ 
+      - grafana-storage:/var/lib/grafana
+    environment:
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_SERVER_HTTP_PORT=3010
+      - GF_SERVER_PROTOCOL=http
+      - GF_SERVER_DOMAIN=app.sentimax.org
+      - GF_SERVER_ROOT_URL=http://app.sentimax.org:3010/grafana/
+      - GF_SERVER_SERVE_FROM_SUB_PATH=true
+    networks:
+      - dagster_network
+    command: >
+      sh -c "cd bin &&
+             chmod +x ./up-grafana.sh &&
+             . ./up-grafana.sh &&  cd .. "
+  
+  nginx:
+    image: australia-southeast1-docker.pkg.dev/ml-dev-403200/dagster-docker/dagster-nginx:develop
+    container_name: nginx-www
+    restart: always
+    volumes: 
+      - ./html:/usr/share/nginx/html:rw
+      - ./nginx/conf:/etc/nginx/conf.d
+      - ./nginx/log:/var/log/nginx
+    networks:
+      - dagster_network
+    ports:
+      - 80:80
+      - 443:443
+
+volumes:
+  docker_postgres:
+    driver: local
+  grafana-storage: {}
+
+networks:
+  dagster_network:
+    driver: bridge
+    name: dagster_network
